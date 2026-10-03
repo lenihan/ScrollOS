@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>scrollos</AssemblyName>
+    <RootNamespace>ScrollOS.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Keep the core Native AOT-compatible so it can be published as a small, fast-starting exe later. -->
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScrollOS.Protocol\ScrollOS.Protocol.csproj" />
+    <!-- Build the PowerShell host alongside the core without linking it in; it runs as a separate process. -->
+    <ProjectReference Include="..\ScrollOS.Host\ScrollOS.Host.csproj" ReferenceOutputAssembly="false" Private="false" SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+  <!-- Copy the host, SDK module and sample apps next to scrollos.exe so the output folder is self-contained. -->
+  <Target Name="CopyScrollOSRuntimeFiles" AfterTargets="Build">
+    <ItemGroup>
+      <HostFiles Include="..\ScrollOS.Host\bin\$(Configuration)\$(TargetFramework)\**\*" />
+      <SdkFiles Include="..\ScrollOS.Sdk\**\*" />
+      <AppFiles Include="..\..\apps\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(HostFiles)" DestinationFiles="@(HostFiles->'$(OutDir)host\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(SdkFiles)" DestinationFiles="@(SdkFiles->'$(OutDir)sdk\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(AppFiles)" DestinationFiles="@(AppFiles->'$(OutDir)apps\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

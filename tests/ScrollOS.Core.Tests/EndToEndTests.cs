@@ -1,0 +1,151 @@
+using System.Text;
+using ScrollOS.Core.Lifecycle;
+using ScrollOS.Core.Terminal;
+using Xunit.Abstractions;
+
+namespace ScrollOS.Core.Tests;
+
+/// <summary>
+/// Runs the real core and PowerShell host against a fake terminal and walks the MVP script from docs/vision.md:
+/// launch an app, interact, exit, still see it, restart, and resume it from history.
+/// </summary>
+public sealed class EndToEndTests(ITestOutputHelper output) : IDisposable
+{
+    static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
+
+    readonly string home = Path.Combine(Path.GetTempPath(), "scrollos-tests", Guid.NewGuid().ToString("n"));
+
+    public void Dispose()
+    {
+        if (Directory.Exists(home)) Directory.Delete(home, recursive: true);
+    }
+
+    [Fact]
+    public async Task LaunchInteractExitAndResumeFromHistory()
+    {
+        var paths = TestPaths();
+
+        // 1-2. Launch NotesPS and add a note.
+        var terminal = new FakeTerminal(100, 40);
+        var run = Task.Run(() => new ScrollOSApp(terminal, paths).RunAsync());
+        await terminal.WaitFor("PowerShell ●");
+        terminal.Type("notes\r");
+        await terminal.WaitFor("No notes yet.");
+        terminal.Type("buy milk\r");
+        await terminal.WaitFor("▸ buy milk");
+
+        // 3-4. Exit it; the artifact stays in the timeline.
+        terminal.Type("\x1b");
+        await terminal.WaitFor("· closed");
+        Assert.Contains("buy milk", terminal.Screen());
+        output.WriteLine("After closing the app:\n" + terminal.Screen());
+        terminal.Type("\x11"); // Ctrl+Q
+        Assert.Equal(0, await run.WaitAsync(Timeout));
+
+        // Restart: history is still there, before PowerShell has even started.
+        var terminal2 = new FakeTerminal(100, 40);
+        var run2 = Task.Run(() => new ScrollOSApp(terminal2, paths).RunAsync());
+        await terminal2.WaitFor("· closed");
+        Assert.Contains("buy milk", terminal2.Screen());
+        await terminal2.WaitFor("PowerShell ●");
+
+        // 5. Click [ Resume ]: a new live entry continues from the artifact with its notes restored.
+        var (x, y) = terminal2.Find("[ Resume ]");
+        terminal2.Type($"\x1b[<0;{x + 2};{y + 1}M\x1b[<0;{x + 2};{y + 1}m");
+        await terminal2.WaitFor("↻ from #");
+        await terminal2.WaitFor("● live");
+        terminal2.Type("research PTYs\r");
+        await terminal2.WaitFor("▸ research PTYs");
+        output.WriteLine("After resuming:\n" + terminal2.Screen());
+
+        terminal2.Type("\x11");
+        Assert.Equal(0, await run2.WaitAsync(Timeout));
+
+        // Quitting saved the resumed app's state too.
+        var index = await File.ReadAllTextAsync(Path.Combine(home, "timeline", "index.jsonl"));
+        Assert.Contains("\"resumedFrom\"", index);
+        var states = Directory.GetFiles(Path.Combine(home, "timeline", "entries"), "state.json", SearchOption.AllDirectories)
+            .Select(File.ReadAllText).ToList();
+        Assert.Contains(states, s => s.Contains("buy milk") && s.Contains("research PTYs"));
+    }
+
+    ScrollPaths TestPaths()
+    {
+        var repo = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(repo, "ScrollOS.sln"))) repo = Path.GetDirectoryName(repo)!;
+        var configuration = AppContext.BaseDirectory.Contains($"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}") ? "Release" : "Debug";
+        var hostExe = Path.Combine(repo, "src", "ScrollOS.Core", "bin", configuration, "net10.0", "host", "scrollos-host.exe");
+        Assert.True(File.Exists(hostExe), $"Build the solution first; host not found at {hostExe}");
+        return new ScrollPaths(home, Path.Combine(repo, "apps"), Path.Combine(repo, "src", "ScrollOS.Sdk", "ScrollOS.Sdk.psm1"), hostExe);
+    }
+
+    /// <summary>A terminal that applies ScrollOS's VT output to an in-memory screen (cursor moves, clears, text).</summary>
+    sealed class FakeTerminal(int width, int height) : ITerminal
+    {
+        readonly char[][] rows = Enumerable.Range(0, height).Select(_ => Enumerable.Repeat(' ', width).ToArray()).ToArray();
+        readonly object gate = new();
+        Action<string>? onInput;
+        int cx, cy;
+
+        public (int Width, int Height) Size => (width, height);
+
+        public void Start(Action<string> onInput) => this.onInput = onInput;
+
+        public void Type(string text) => onInput!(text);
+
+        public void Write(string vt)
+        {
+            lock (gate)
+            {
+                for (int i = 0; i < vt.Length; i++)
+                {
+                    if (vt[i] == '\x1b' && i + 1 < vt.Length && vt[i + 1] == '[')
+                    {
+                        int j = i + 2;
+                        while (j < vt.Length && (vt[j] < '@' || vt[j] > '~')) j++;
+                        var parameters = vt[(i + 2)..j].Split(';');
+                        if (vt[j] == 'H')
+                        {
+                            cy = parameters.Length > 0 && int.TryParse(parameters[0], out var r) ? r - 1 : 0;
+                            cx = parameters.Length > 1 && int.TryParse(parameters[1], out var c) ? c - 1 : 0;
+                        }
+                        else if (vt[j] == 'J')
+                        {
+                            foreach (var row in rows) Array.Fill(row, ' ');
+                        }
+                        i = j;
+                    }
+                    else if (cx < width && cy < height)
+                    {
+                        rows[cy][cx++] = vt[i];
+                    }
+                }
+            }
+        }
+
+        public string Screen()
+        {
+            lock (gate) return string.Join("\n", rows.Select(r => new string(r)));
+        }
+
+        public (int X, int Y) Find(string text)
+        {
+            var lines = Screen().Split('\n');
+            for (int y = lines.Length - 1; y >= 0; y--)
+                if (lines[y].IndexOf(text, StringComparison.Ordinal) is var x and >= 0) return (x, y);
+            throw new Xunit.Sdk.XunitException($"'{text}' not on screen:\n{Screen()}");
+        }
+
+        public async Task WaitFor(string text)
+        {
+            var deadline = DateTime.UtcNow + Timeout;
+            while (!Screen().Contains(text))
+            {
+                if (DateTime.UtcNow > deadline) throw new Xunit.Sdk.XunitException($"Timed out waiting for '{text}'. Screen:\n{Screen()}");
+                await Task.Delay(50);
+            }
+        }
+
+        public void Dispose() { }
+    }
+}
