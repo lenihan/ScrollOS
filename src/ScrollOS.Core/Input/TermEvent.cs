@@ -23,9 +23,12 @@ public sealed record KeyEvent(Key Key, char Ch = '\0', Mods Mods = Mods.None) : 
     /// <summary>Printable character with no Ctrl/Alt.</summary>
     public bool IsText => Key == Key.Char && (Mods & (Mods.Ctrl | Mods.Alt)) == 0;
 
-    /// <summary>The name apps see in key events, e.g. "Up", "Delete", "a", "Ctrl+S".</summary>
+    /// <summary>The name apps see in key events, e.g. "Up", "Delete", "Space", "a", "Ctrl+S".</summary>
     public string Name => Key == Key.Char
-        ? (Mods.HasFlag(Mods.Ctrl) ? "Ctrl+" + char.ToUpperInvariant(Ch) : Mods.HasFlag(Mods.Alt) ? "Alt+" + Ch : Ch.ToString())
+        ? (Mods.HasFlag(Mods.Ctrl) ? "Ctrl+" + char.ToUpperInvariant(Ch)
+            : Mods.HasFlag(Mods.Alt) ? "Alt+" + Ch
+            : Ch == ' ' ? "Space"
+            : Ch.ToString())
         : Key.ToString();
 }
 

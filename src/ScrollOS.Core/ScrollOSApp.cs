@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ScrollOS.Core.Audio;
 using ScrollOS.Core.Input;
 using ScrollOS.Core.Lifecycle;
 using ScrollOS.Core.Render;
@@ -29,6 +30,7 @@ public sealed class ScrollOSApp
 
     readonly ITerminal terminal;
     readonly ScrollPaths paths;
+    readonly IAudio audio;
     readonly TimelineStore store;
     readonly Dictionary<long, AppSession> sessions = [];
     readonly TimelineView view;
@@ -52,13 +54,22 @@ public sealed class ScrollOSApp
     DateTime? quitDeadline;
     bool stop;
 
-    public ScrollOSApp(ITerminal terminal, ScrollPaths paths)
+    /// <summary>Plays when a background app posts a notification.</summary>
+    const string NotificationChime = "sine:880/90,1320/160";
+
+    public ScrollOSApp(ITerminal terminal, ScrollPaths paths, IAudio? audio = null)
     {
         this.terminal = terminal;
         this.paths = paths;
+        this.audio = audio ?? DefaultAudio(paths);
         store = new TimelineStore(paths.Home);
         view = new TimelineView(store, sessions);
     }
+
+    static IAudio DefaultAudio(ScrollPaths paths) =>
+        OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("SCROLLOS_MUTE") is not "1"
+            ? new WindowsAudio(Path.Combine(paths.Home, "cache", "sounds"))
+            : new NullAudio();
 
     public async Task<int> RunAsync()
     {
@@ -437,6 +448,7 @@ public sealed class ScrollOSApp
         store.Update(entry);
         if (focusedApp == id) Focus(null);
         view.Invalidate(id);
+        SendEvent(session, new InputEvent { Type = "suspend" });
     }
 
     /// <summary>
@@ -464,6 +476,7 @@ public sealed class ScrollOSApp
         view.Invalidate(old.Id);
         Focus(entry.Id);
         scroll = 0;
+        SendEvent(session, new InputEvent { Type = "resume" });
     }
 
     void Close(long id)
@@ -566,7 +579,13 @@ public sealed class ScrollOSApp
                 break;
 
             case MessageTypes.Notify when m.Text is not null:
-                Notify(m.Text, m.Error is not null, SessionForHost(m.Entry)?.EntryId);
+                var source = SessionForHost(m.Entry)?.EntryId;
+                Notify(m.Text, m.Error is not null, source);
+                if (source is not null) audio.Play(NotificationChime);
+                break;
+
+            case MessageTypes.Sound when m.Text is not null:
+                audio.Play(m.Text);
                 break;
         }
     }

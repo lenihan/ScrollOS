@@ -10,7 +10,8 @@
 #   Invoke-AppInput <event>        handle an event; output 'exit' to close (optional)
 #   Save-AppState                  return state to persist                 (optional)
 #
-# Events are hashtables: @{ type = 'click'|'select'|'submit'|'key'|'tick'; target; index; value; key }
+# Events are hashtables: @{ type = 'click'|'select'|'submit'|'key'|'tick'|'suspend'|'resume'; target; index; value; key }
+# 'suspend' arrives when the app is sent to the background (Ctrl+Z), 'resume' when it comes back.
 #
 # Background work: call Set-ScrollTimer to receive 'tick' events, which keep arriving while the app is
 # suspended (Ctrl+Z). Send-ScrollNotification adds an entry to the timeline; clicking it opens the app.
@@ -85,6 +86,59 @@ function New-Input {
 
 function New-Divider {
     [ordered]@{ type = 'divider' }
+}
+
+function New-Canvas {
+    <#
+    A Width x Height pixel area (two pixels per terminal cell, stacked vertically).
+    -Sprites maps names to @{ rows = @('.#.', '###'); color = '#ff0000'; palette = @{ r = '#ff0000' } }
+    ('.' and ' ' are transparent). -Draw places sprites: @{ s = 'name'; x = 3; y = 4; color = optional }.
+    -Rects fills rectangles: @{ x; y; w; h; color }.
+    #>
+    param(
+        [int]$Width = 64,
+        [int]$Height = 32,
+        [string]$Bg,
+        [hashtable]$Sprites = @{},
+        [object[]]$Draw = @(),
+        [object[]]$Rects = @(),
+        [string]$Id = 'canvas'
+    )
+    [ordered]@{
+        type    = 'canvas'
+        id      = $Id
+        width   = $Width
+        height  = $Height
+        bg      = $Bg
+        sprites = $Sprites
+        draw    = @($Draw)
+        rects   = @($Rects)
+    }
+}
+
+function Play-Sound {
+    <#
+    Plays a sound through the ScrollOS audio engine (one at a time; a new sound cuts off the previous one).
+      Play-Sound victory.wav
+      Play-Sound -Tone 440,80, 660,80, 880,160     # frequency Hz, milliseconds pairs; 0 Hz is a rest
+      Play-Sound -Tone 523,200 -Sine               # softer sine wave instead of square
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'File')]
+    param(
+        [Parameter(ParameterSetName = 'File', Mandatory, Position = 0)][string]$Path,
+        [Parameter(ParameterSetName = 'Tone', Mandatory)][int[]]$Tone,
+        [Parameter(ParameterSetName = 'Tone')][switch]$Sine
+    )
+    if (-not $global:ScrollOS) { return }
+    if ($PSCmdlet.ParameterSetName -eq 'Tone') {
+        if ($Tone.Count % 2 -ne 0) { throw '-Tone takes frequency,milliseconds pairs.' }
+        $notes = for ($i = 0; $i -lt $Tone.Count; $i += 2) { "$($Tone[$i])/$($Tone[$i + 1])" }
+        $wave = if ($Sine) { 'sine' } else { 'tone' }
+        $global:ScrollOS.PlaySound("${wave}:$($notes -join ',')")
+    }
+    else {
+        $global:ScrollOS.PlaySound((Resolve-Path -LiteralPath $Path).ProviderPath)
+    }
 }
 
 # ---------------------------------------------------------------------------- shell commands
@@ -166,5 +220,5 @@ function Register-ScrollApps {
     }
 }
 
-Export-ModuleMember -Function New-Panel, New-Column, New-Row, New-Text, New-Button, New-List, New-Input, New-Divider,
+Export-ModuleMember -Function New-Panel, New-Column, New-Row, New-Text, New-Button, New-List, New-Input, New-Divider, New-Canvas, Play-Sound,
     Get-ScrollApp, Start-ScrollApp, Resume-App, Get-Timeline, Register-ScrollApps, Send-ScrollNotification, Set-ScrollTimer

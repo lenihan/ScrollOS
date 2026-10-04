@@ -20,8 +20,15 @@
 
   <!-- Copy the host, SDK module and sample apps next to scrollos.exe so the output folder is self-contained. -->
   <Target Name="CopyScrollOSRuntimeFiles" AfterTargets="Build">
+    <!-- Ask the host project where it built to, so this also works with custom output paths (e.g. artifacts paths). -->
+    <MSBuild Projects="..\ScrollOS.Host\ScrollOS.Host.csproj" Targets="GetTargetPath">
+      <Output TaskParameter="TargetOutputs" ItemName="HostTargetPath" />
+    </MSBuild>
+    <PropertyGroup>
+      <HostOutDir>@(HostTargetPath->'%(RootDir)%(Directory)')</HostOutDir>
+    </PropertyGroup>
     <ItemGroup>
-      <HostFiles Include="..\ScrollOS.Host\bin\$(Configuration)\$(TargetFramework)\**\*" />
+      <HostFiles Include="$(HostOutDir)**\*" />
       <SdkFiles Include="..\ScrollOS.Sdk\**\*" />
       <AppFiles Include="..\..\apps\**\*" />
     </ItemGroup>

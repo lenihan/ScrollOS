@@ -42,6 +42,8 @@ public static class MessageTypes
     public const string ResumeRequest = "resume-request";
     public const string QuitRequest = "quit-request";
     public const string Notify = "notify";
+    /// <summary>Text is a .wav path, or a tone spec like "tone:440/80,660/80" (frequency Hz / milliseconds).</summary>
+    public const string Sound = "sound";
 }
 
 /// <summary>An abstract input event delivered to an app's Invoke-AppInput.</summary>
@@ -61,7 +63,7 @@ public sealed class InputEvent
 /// </summary>
 public sealed class Widget
 {
-    /// <summary>panel | column | row | text | button | list | input | divider</summary>
+    /// <summary>panel | column | row | text | button | list | input | divider | canvas</summary>
     public string? Type { get; set; }
     public string? Id { get; set; }
     public string? Text { get; set; }
@@ -75,6 +77,42 @@ public sealed class Widget
     public bool? Bold { get; set; }
     public bool? Dim { get; set; }
     public List<Widget>? Children { get; set; }
+
+    // Canvas: a Width x Height pixel area drawn from rectangles and named sprites.
+    public int? Width { get; set; }
+    public int? Height { get; set; }
+    public Dictionary<string, Sprite>? Sprites { get; set; }
+    public List<SpriteDraw>? Draw { get; set; }
+    public List<FillRect>? Rects { get; set; }
+}
+
+/// <summary>
+/// A small bitmap. Each row is a string; '.' and ' ' are transparent, any other character is a pixel in
+/// <see cref="Color"/>, or in the color <see cref="Palette"/> maps that character to.
+/// </summary>
+public sealed class Sprite
+{
+    public List<string>? Rows { get; set; }
+    public string? Color { get; set; }
+    public Dictionary<string, string>? Palette { get; set; }
+}
+
+/// <summary>Draws sprite <see cref="S"/> with its top-left corner at (X, Y). Coordinates are doubles because PowerShell math often produces them.</summary>
+public sealed class SpriteDraw
+{
+    public string? S { get; set; }
+    public double X { get; set; }
+    public double Y { get; set; }
+    public string? Color { get; set; }
+}
+
+public sealed class FillRect
+{
+    public double X { get; set; }
+    public double Y { get; set; }
+    public double W { get; set; } = 1;
+    public double H { get; set; } = 1;
+    public string? Color { get; set; }
 }
 
 [JsonSourceGenerationOptions(

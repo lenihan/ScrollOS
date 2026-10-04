@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Collections.Concurrent;
+using ScrollOS.Core.Audio;
 using ScrollOS.Core.Lifecycle;
 using ScrollOS.Core.Terminal;
 using Xunit.Abstractions;
@@ -15,6 +17,7 @@ public sealed class EndToEndTests(ITestOutputHelper output) : IDisposable
     static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
     readonly string home = Path.Combine(Path.GetTempPath(), "scrollos-tests", Guid.NewGuid().ToString("n"));
+    readonly RecordingAudio audio = new();
 
     public void Dispose()
     {
@@ -28,7 +31,7 @@ public sealed class EndToEndTests(ITestOutputHelper output) : IDisposable
 
         // 1-2. Launch NotesPS and add a note.
         var terminal = new FakeTerminal(100, 40);
-        var run = Task.Run(() => new ScrollOSApp(terminal, paths).RunAsync());
+        var run = Task.Run(() => new ScrollOSApp(terminal, paths, audio).RunAsync());
         await terminal.WaitFor("PowerShell ●");
         terminal.Type("notes\r");
         await terminal.WaitFor("No notes yet.");
@@ -45,7 +48,7 @@ public sealed class EndToEndTests(ITestOutputHelper output) : IDisposable
 
         // Restart: history is still there, before PowerShell has even started.
         var terminal2 = new FakeTerminal(100, 40);
-        var run2 = Task.Run(() => new ScrollOSApp(terminal2, paths).RunAsync());
+        var run2 = Task.Run(() => new ScrollOSApp(terminal2, paths, audio).RunAsync());
         await terminal2.WaitFor("· closed");
         Assert.Contains("buy milk", terminal2.Screen());
         await terminal2.WaitFor("PowerShell ●");
@@ -75,7 +78,7 @@ public sealed class EndToEndTests(ITestOutputHelper output) : IDisposable
     {
         var paths = TestPaths();
         var terminal = new FakeTerminal(100, 40);
-        var run = Task.Run(() => new ScrollOSApp(terminal, paths).RunAsync());
+        var run = Task.Run(() => new ScrollOSApp(terminal, paths, audio).RunAsync());
         await terminal.WaitFor("PowerShell ●");
 
         // Start a ~2 second timer, then send it to the background.
@@ -101,6 +104,61 @@ public sealed class EndToEndTests(ITestOutputHelper output) : IDisposable
 
         terminal.Type("\x11");
         Assert.Equal(0, await run.WaitAsync(Timeout));
+        Assert.Contains(audio.Played, s => s.StartsWith("sine:")); // the notification chime
+    }
+
+    [Fact]
+    public async Task GameDrawsAnimatesPlaysSoundsAndPausesInBackground()
+    {
+        var paths = TestPaths();
+        var terminal = new FakeTerminal(100, 40);
+        var run = Task.Run(() => new ScrollOSApp(terminal, paths, audio).RunAsync());
+        await terminal.WaitFor("PowerShell ●");
+
+        terminal.Type("invaders\r");
+        await terminal.WaitFor("Score 0");
+        Assert.Contains("▀", terminal.Screen()); // sprites drawn with half blocks
+
+        // Firing plays a sound and the shot animates on timer ticks.
+        terminal.Type(" ");
+        await WaitUntil(() => audio.Played.Contains("tone:1400/25,900/25"),
+            () => $"fire sound; played: [{string.Join(" | ", audio.Played)}]\n{terminal.Screen()}\nhost log:\n" +
+                  (File.Exists(paths.HostLog) ? File.ReadAllText(paths.HostLog) : "(none)"));
+        var before = terminal.Screen();
+        await WaitUntil(() => terminal.Screen() != before, () => "animation frame");
+        output.WriteLine("Playing:\n" + terminal.Screen());
+
+        // Sending it to the background pauses the game.
+        terminal.Type("\x1a");
+        await terminal.WaitFor("Paused · press P to continue");
+        await terminal.WaitFor("◐ running in background");
+
+        terminal.Type("\x11");
+        Assert.Equal(0, await run.WaitAsync(Timeout));
+
+        var state = Directory.GetFiles(Path.Combine(home, "timeline", "entries"), "state.json", SearchOption.AllDirectories)
+            .Select(File.ReadAllText).Single();
+        Assert.Contains("\"playerX\"", state);
+        Assert.Contains("\"state\":\"paused\"", state);
+    }
+
+    static async Task WaitUntil(Func<bool> condition, Func<string> what)
+    {
+        var deadline = DateTime.UtcNow + Timeout;
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline) throw new Xunit.Sdk.XunitException($"Timed out waiting for {what()}.");
+            await Task.Delay(50);
+        }
+    }
+
+    sealed class RecordingAudio : IAudio
+    {
+        readonly ConcurrentQueue<string> played = new();
+
+        public IReadOnlyCollection<string> Played => played;
+
+        public void Play(string sound) => played.Enqueue(sound);
     }
 
     ScrollPaths TestPaths([CallerFilePath] string sourceFile = "")

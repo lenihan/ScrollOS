@@ -35,6 +35,10 @@ Background apps: type `timer`, enter `0.5 tea` to start a 30-second countdown, t
 keeps running in the background (still visible, dimmed, in its timeline entry). When it ends, a notification
 appears in the timeline; click it to bring the timer back at the bottom.
 
+Graphics and sound: type `invaders`. Use **←/→** to move, **Space** to fire, and **P** to pause. **Ctrl+Z** pauses
+the game and sends it to the background; close or quit mid-game and **[ Resume ]** puts you back where you were.
+Set `SCROLLOS_MUTE=1` to turn sound off.
+
 Other keys: **Tab** switches between the prompt and the live app, and **PgUp/PgDn** scroll.
 Useful commands: `Get-Timeline`, `Get-ScrollApp`, `Start-ScrollApp <name>`.
 Data lives in `%USERPROFILE%\.scrollos` (override with `--home <dir>`). The host log is in `logs\host.log`.
@@ -46,9 +50,10 @@ Data lives in `%USERPROFILE%\.scrollos` (override with `--home <dir>`). The host
 | `src/ScrollOS.Core` | `scrollos.exe`: terminal, rendering, input, timeline, app lifecycle (no PowerShell, starts fast) |
 | `src/ScrollOS.Host` | `scrollos-host.exe`: hosts PowerShell; one runspace per app, plus the shell |
 | `src/ScrollOS.Protocol` | JSON-lines messages and the widget tree shared by both |
-| `src/ScrollOS.Sdk` | PowerShell module: widget builders (`New-Panel`, `New-List`, …) and shell commands |
-| `apps/` | Apps, one folder per app (`apps/NotesPS/NotesPS.psm1`, `apps/TimerPS/TimerPS.psm1`) |
-| `tests/` | Unit tests, plus an end-to-end test that runs the full launch → close → resume flow |
+| `src/ScrollOS.Sdk` | PowerShell module: widget builders (`New-Panel`, `New-List`, `New-Canvas`, …), `Play-Sound`, and shell commands |
+| `apps/` | Apps, one folder per app: `NotesPS`, `TimerPS`, `InvadersPS` |
+| `tests/` | Unit tests, plus end-to-end tests that run the real core and PowerShell host |
 
 Writing an app: see the contract at the top of [ScrollOS.Sdk.psm1](src/ScrollOS.Sdk/ScrollOS.Sdk.psm1) and the
-[NotesPS](apps/NotesPS/NotesPS.psm1) example.
+[NotesPS](apps/NotesPS/NotesPS.psm1) (simplest), [TimerPS](apps/TimerPS/TimerPS.psm1) (background work) and
+[InvadersPS](apps/InvadersPS/InvadersPS.psm1) (graphics, animation, sound) examples.

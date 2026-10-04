@@ -290,6 +290,9 @@ public sealed class CoreBridge(ScrollHost host, AppSession? app = null)
     public void Notify(string text) =>
         host.Send(new Message { Type = MessageTypes.Notify, Text = text, Entry = app?.Entry ?? 0 });
 
+    /// <summary>Asks the core to play a .wav path or a tone spec ("tone:440/80,660/80").</summary>
+    public void PlaySound(string sound) => host.Send(new Message { Type = MessageTypes.Sound, Text = sound });
+
     public void SetTimer(int milliseconds)
     {
         if (app is null) throw new InvalidOperationException("Timers are only available to apps.");

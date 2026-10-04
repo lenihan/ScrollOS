@@ -68,6 +68,7 @@ public static class LayoutEngine
             "list" => DrawList(w, r, x, y, width),
             "input" => DrawInput(w, r, ctx, x, y, width),
             "divider" => DrawDivider(r, x, y, width),
+            "canvas" => DrawCanvas(w, r, x, y, width),
             _ => DrawColumn(w, r, ctx, x, y, width, depth),
         };
     }
@@ -232,6 +233,72 @@ public static class LayoutEngine
     {
         r.Canvas.Fill(x, y, width, 1, '─', new Style(Fg: Theme.Border));
         return 1;
+    }
+
+    const int MaxCanvasSize = 1000;
+    static readonly int White = Style.Rgb(230, 233, 240);
+
+    /// <summary>
+    /// Rasterizes rectangles and sprites into a pixel buffer, then draws two pixels per cell with half blocks:
+    /// '▀' with the top pixel as foreground and the bottom pixel as background. Works in any truecolor terminal,
+    /// diffs like text, and is stored in history like any other widget.
+    /// </summary>
+    static int DrawCanvas(Widget w, LayoutResult r, int x, int y, int width)
+    {
+        int pw = Math.Clamp(w.Width ?? width, 1, MaxCanvasSize);
+        int ph = Math.Clamp(w.Height ?? 20, 1, MaxCanvasSize);
+        int bg = Style.Hex(w.Bg);
+        var pixels = new int[pw * ph];
+        Array.Fill(pixels, bg);
+
+        void Plot(int px, int py, int color)
+        {
+            if (px >= 0 && py >= 0 && px < pw && py < ph) pixels[py * pw + px] = color;
+        }
+
+        foreach (var rect in w.Rects ?? [])
+        {
+            int color = Color(rect.Color, White);
+            int rx = (int)Math.Round(rect.X), ry = (int)Math.Round(rect.Y);
+            int rw = (int)Math.Round(rect.W), rh = (int)Math.Round(rect.H);
+            for (int py = Math.Max(0, ry); py < Math.Min(ph, ry + rh); py++)
+                for (int px = Math.Max(0, rx); px < Math.Min(pw, rx + rw); px++)
+                    pixels[py * pw + px] = color;
+        }
+
+        foreach (var draw in w.Draw ?? [])
+        {
+            if (draw.S is null || w.Sprites is null || !w.Sprites.TryGetValue(draw.S, out var sprite) || sprite.Rows is null) continue;
+            int color = Color(draw.Color, Color(sprite.Color, White));
+            int ox = (int)Math.Round(draw.X), oy = (int)Math.Round(draw.Y);
+            for (int row = 0; row < sprite.Rows.Count; row++)
+            {
+                var line = sprite.Rows[row] ?? "";
+                for (int col = 0; col < line.Length; col++)
+                {
+                    char ch = line[col];
+                    if (ch is '.' or ' ') continue;
+                    int c = sprite.Palette is not null && sprite.Palette.TryGetValue(ch.ToString(), out var hex) ? Color(hex, color) : color;
+                    Plot(ox + col, oy + row, c);
+                }
+            }
+        }
+
+        int cols = Math.Min(pw, width);
+        int rows = (ph + 1) / 2;
+        for (int cy = 0; cy < rows; cy++)
+        {
+            for (int cx = 0; cx < cols; cx++)
+            {
+                int top = pixels[2 * cy * pw + cx];
+                int bottom = 2 * cy + 1 < ph ? pixels[(2 * cy + 1) * pw + cx] : bg;
+                if (top == bottom) r.Canvas.Put(x + cx, y + cy, ' ', new Style(Bg: top));
+                else if (top == 0) r.Canvas.Put(x + cx, y + cy, '▄', new Style(Fg: bottom));
+                else r.Canvas.Put(x + cx, y + cy, '▀', new Style(Fg: top, Bg: bottom));
+            }
+        }
+        r.Canvas.EnsureHeight(y + rows);
+        return rows;
     }
 
     static int Color(string? hex, int fallback) => Style.Hex(hex) is var c && c != 0 ? c : fallback;
