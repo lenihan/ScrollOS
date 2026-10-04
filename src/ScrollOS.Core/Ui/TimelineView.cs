@@ -5,7 +5,7 @@ using ScrollOS.Protocol;
 
 namespace ScrollOS.Core.Ui;
 
-public enum UiActionKind { Resume, Close, FocusApp, AppHit, FocusPrompt, Artifact }
+public enum UiActionKind { Resume, Close, Suspend, FocusApp, AppHit, FocusPrompt, Artifact }
 
 public sealed record UiAction(UiActionKind Kind, long Entry = 0, Hit? Hit = null);
 
@@ -122,13 +122,27 @@ public sealed class TimelineView(TimelineStore store, IReadOnlyDictionary<long, 
         b.Canvas.EnsureHeight(2);
     }
 
-    static void BuildNotification(TimelineEntry e, Block b)
+    void BuildNotification(TimelineEntry e, Block b)
     {
         var style = new Style(Fg: e.Error ? Theme.ErrorFg : Theme.Accent);
-        var lines = TextWrap.Wrap(e.Title, b.Width - 2);
+        var source = e.Source is { } id ? store.Get(id) : null;
+        var text = source is null ? e.Title : $"{source.App ?? source.Title} · {e.Title}";
+        var lines = TextWrap.Wrap(text, b.Width - 2);
         for (int i = 0; i < lines.Count; i++)
             b.Canvas.Write(i == 0 ? 0 : 2, i, (i == 0 ? "● " : "") + lines[i], style);
-        b.Canvas.EnsureHeight(lines.Count + 1);
+
+        if (source is not null)
+        {
+            // Clicking a notification takes you to the app that sent it.
+            var hint = $"  {e.Time.LocalDateTime:HH:mm} · click to open #{source.Id}";
+            b.Canvas.Write(2, lines.Count, hint, new Style(Fg: Theme.Muted));
+            b.Hits.Add(new UiHit(new Rect(0, 0, b.Width, lines.Count + 1), new UiAction(UiActionKind.Resume, source.Id)));
+            b.Canvas.EnsureHeight(lines.Count + 2);
+        }
+        else
+        {
+            b.Canvas.EnsureHeight(lines.Count + 1);
+        }
     }
 
     void BuildPrompt(TimelineEntry e, Block b)
@@ -155,27 +169,45 @@ public sealed class TimelineView(TimelineStore store, IReadOnlyDictionary<long, 
     {
         var c = b.Canvas;
         bool live = e.Status == EntryStatus.Live;
-        var session = live ? sessions.GetValueOrDefault(e.Id) : null;
+        bool suspended = e.Status == EntryStatus.Suspended;
+        var session = live || suspended ? sessions.GetValueOrDefault(e.Id) : null;
 
-        // Header: "─ #12 Notes · 09:05 · ↻ from #7 · ● live ──────── [ Close ]"
-        var state = !live ? "closed" : session?.Closing == true ? "closing…" : "● live";
+        // Header: "─ #12 Notes · 09:05 · ↻ from #7 · ● live ──────── [ Suspend ] [ Close ]"
+        var state = session?.Closing == true ? "closing…"
+            : live ? "● live"
+            : suspended ? "◐ running in background"
+            : e.ContinuedIn is { } next ? $"continued in #{next}"
+            : "closed";
         var resumed = e.ResumedFrom is { } from ? $" · ↻ from #{from}" : "";
         var header = $" #{e.Id} {e.App ?? e.Title} · {e.Time.LocalDateTime:HH:mm}{resumed} · {state} ";
-        var button = live ? "[ Close ]" : "[ Resume ]";
+        (string Label, UiActionKind Action)[] buttons = live
+            ? [("[ Suspend ]", UiActionKind.Suspend), ("[ Close ]", UiActionKind.Close)]
+            : suspended
+                ? [("[ Resume ]", UiActionKind.Resume), ("[ Close ]", UiActionKind.Close)]
+                : [("[ Resume ]", UiActionKind.Resume)];
+        int buttonsWidth = buttons.Sum(x => x.Label.Length + 1) - 1;
+
         var line = new Style(Fg: focused ? Theme.Accent : Theme.Border);
         c.Fill(0, 0, b.Width, 1, '─', line);
-        c.Write(1, 0, header, new Style(Fg: live ? Theme.Accent : Theme.Muted, Bold: live), b.Width - button.Length - 2);
-        int bx = Math.Max(0, b.Width - button.Length);
-        c.Write(bx, 0, button, new Style(Fg: Style.Rgb(230, 233, 240), Bg: Theme.ButtonBg, Bold: true));
+        c.Write(1, 0, header, new Style(Fg: live || suspended ? Theme.Accent : Theme.Muted, Bold: live), b.Width - buttonsWidth - 2);
+        var buttonHits = new List<UiHit>();
+        int bx = Math.Max(0, b.Width - buttonsWidth);
+        c.Fill(bx, 0, buttonsWidth, 1, ' ', default);
+        foreach (var (label, action) in buttons)
+        {
+            c.Write(bx, 0, label, new Style(Fg: Style.Rgb(230, 233, 240), Bg: Theme.ButtonBg, Bold: true));
+            buttonHits.Add(new UiHit(new Rect(bx, 0, label.Length, 1), new UiAction(action, e.Id)));
+            bx += label.Length + 1;
+        }
 
-        // Body: the live UI, or the frozen snapshot of the app as it was when it closed.
-        Widget? tree = live ? session?.Tree : LoadTree(e.Id);
+        // Body: the live UI (dimmed while in the background), or the frozen snapshot from when it closed.
+        Widget? tree = session is not null ? session.Tree : LoadTree(e.Id);
         int bodyWidth = Math.Max(1, b.Width - Gutter);
         int y = 1;
         var appHits = new List<UiHit>();
         if (tree is null)
         {
-            c.Write(Gutter, y++, live ? "starting…" : "(no snapshot)", new Style(Fg: Theme.Muted));
+            c.Write(Gutter, y++, session is not null ? "starting…" : "(no snapshot)", new Style(Fg: Theme.Muted));
         }
         else
         {
@@ -193,7 +225,7 @@ public sealed class TimelineView(TimelineStore store, IReadOnlyDictionary<long, 
             y += layout.Canvas.Height;
         }
 
-        var error = session?.Error ?? (live ? null : store.ReadText(e.Id, TimelineStore.ErrorFile));
+        var error = session is not null ? session.Error : store.ReadText(e.Id, TimelineStore.ErrorFile);
         if (!string.IsNullOrEmpty(error))
             foreach (var errorLine in TextWrap.Wrap(error, bodyWidth))
                 c.Write(Gutter, y++, errorLine, new Style(Fg: Theme.ErrorFg));
@@ -205,7 +237,7 @@ public sealed class TimelineView(TimelineStore store, IReadOnlyDictionary<long, 
         // Whole-block hits first so buttons and widgets (added later) take precedence.
         var body = new Rect(0, 0, b.Width, y);
         b.Hits.Add(new UiHit(body, new UiAction(live ? UiActionKind.FocusApp : UiActionKind.Artifact, e.Id)));
-        b.Hits.Add(new UiHit(new Rect(bx, 0, button.Length, 1), new UiAction(live ? UiActionKind.Close : UiActionKind.Resume, e.Id)));
+        b.Hits.AddRange(buttonHits);
         b.Hits.AddRange(appHits);
     }
 

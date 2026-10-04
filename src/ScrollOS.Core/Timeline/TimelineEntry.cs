@@ -4,7 +4,11 @@ namespace ScrollOS.Core.Timeline;
 
 public enum EntryKind { Session, Prompt, App, Notification }
 
-public enum EntryStatus { Done, Running, Live, Closed }
+/// <summary>
+/// Done/Running: commands. Live: an app in the foreground. Suspended: an app still running in the background.
+/// Closed: an app that has exited and is now a frozen artifact.
+/// </summary>
+public enum EntryStatus { Done, Running, Live, Closed, Suspended }
 
 /// <summary>
 /// One item in the timeline. Large content (command output, the app's last UI tree, app state)
@@ -23,6 +27,10 @@ public sealed class TimelineEntry
     public string? AppPath { get; set; }
     /// <summary>For resumed apps, the artifact this entry continues from.</summary>
     public long? ResumedFrom { get; set; }
+    /// <summary>For an app that was suspended and later resumed, the entry where it continued.</summary>
+    public long? ContinuedIn { get; set; }
+    /// <summary>For notifications, the app entry that sent it.</summary>
+    public long? Source { get; set; }
     public bool Error { get; set; }
 }
 

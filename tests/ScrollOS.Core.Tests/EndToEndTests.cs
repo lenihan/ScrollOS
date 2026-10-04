@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using ScrollOS.Core.Lifecycle;
 using ScrollOS.Core.Terminal;
@@ -69,13 +70,53 @@ public sealed class EndToEndTests(ITestOutputHelper output) : IDisposable
         Assert.Contains(states, s => s.Contains("buy milk") && s.Contains("research PTYs"));
     }
 
-    ScrollPaths TestPaths()
+    [Fact]
+    public async Task SuspendedAppKeepsRunningAndNotifies()
     {
-        var repo = AppContext.BaseDirectory;
+        var paths = TestPaths();
+        var terminal = new FakeTerminal(100, 40);
+        var run = Task.Run(() => new ScrollOSApp(terminal, paths).RunAsync());
+        await terminal.WaitFor("PowerShell ●");
+
+        // Start a ~2 second timer, then send it to the background.
+        terminal.Type("timer\r");
+        await terminal.WaitFor("05:00");
+        terminal.Type("0.03 tea\r");
+        await terminal.WaitFor("Running");
+        terminal.Type("\x1a"); // Ctrl+Z
+        await terminal.WaitFor("◐ running in background");
+        await terminal.WaitFor("◐ 1 in background");
+
+        // It keeps ticking in the background and posts a notification when done.
+        await terminal.WaitFor("'tea' finished");
+        output.WriteLine("After the background timer finished:\n" + terminal.Screen());
+
+        // Clicking the notification brings the app back at the bottom; the old entry is frozen and points to it.
+        var (x, y) = terminal.Find("'tea' finished");
+        terminal.Type($"\x1b[<0;{x + 1};{y + 1}M\x1b[<0;{x + 1};{y + 1}m");
+        await terminal.WaitFor("continued in #");
+        await terminal.WaitFor("● live");
+        Assert.DoesNotContain("in background", terminal.Screen());
+        output.WriteLine("After clicking the notification:\n" + terminal.Screen());
+
+        terminal.Type("\x11");
+        Assert.Equal(0, await run.WaitAsync(Timeout));
+    }
+
+    ScrollPaths TestPaths([CallerFilePath] string sourceFile = "")
+    {
+        // The repo is found from this source file so the tests also work when built with --artifacts-path.
+        var repo = Path.GetDirectoryName(sourceFile)!;
         while (!File.Exists(Path.Combine(repo, "ScrollOS.sln"))) repo = Path.GetDirectoryName(repo)!;
         var configuration = AppContext.BaseDirectory.Contains($"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}") ? "Release" : "Debug";
-        var hostExe = Path.Combine(repo, "src", "ScrollOS.Core", "bin", configuration, "net10.0", "host", "scrollos-host.exe");
-        Assert.True(File.Exists(hostExe), $"Build the solution first; host not found at {hostExe}");
+        string[] candidates =
+        [
+            // Built with --artifacts-path: <artifacts>/bin/ScrollOS.Core.Tests/<config>/ next to <artifacts>/bin/ScrollOS.Core/<config>/
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "ScrollOS.Core", configuration.ToLowerInvariant(), "host", "scrollos-host.exe")),
+            Path.Combine(repo, "src", "ScrollOS.Core", "bin", configuration, "net10.0", "host", "scrollos-host.exe"),
+        ];
+        var hostExe = candidates.FirstOrDefault(File.Exists);
+        Assert.True(hostExe is not null, $"Build the solution first; host not found at {string.Join(" or ", candidates)}");
         return new ScrollPaths(home, Path.Combine(repo, "apps"), Path.Combine(repo, "src", "ScrollOS.Sdk", "ScrollOS.Sdk.psm1"), hostExe);
     }
 

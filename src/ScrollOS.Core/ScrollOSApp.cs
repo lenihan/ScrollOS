@@ -153,11 +153,19 @@ public sealed class ScrollOSApp
 
     void HandleInput(TermEvent input)
     {
-        dirty = true;
         switch (input)
         {
-            case KeyEvent key: HandleKey(key); break;
-            case MouseEvent mouse: HandleMouse(mouse); break;
+            case KeyEvent key:
+                HandleKey(key);
+                dirty = true;
+                break;
+            // Hover and drag don't change anything yet, so they don't cost a redraw.
+            case MouseEvent { Kind: MouseKind.Move or MouseKind.Drag or MouseKind.Up }:
+                break;
+            case MouseEvent mouse:
+                HandleMouse(mouse);
+                dirty = true;
+                break;
         }
     }
 
@@ -202,6 +210,11 @@ public sealed class ScrollOSApp
 
     void HandleAppKey(AppSession session, KeyEvent key)
     {
+        if (key.IsCtrl('z'))
+        {
+            Suspend(session.EntryId);
+            return;
+        }
         switch (key.Key)
         {
             case Key.Escape:
@@ -210,6 +223,12 @@ public sealed class ScrollOSApp
             case Key.Tab:
                 Focus(null);
                 return;
+        }
+
+        if (session.Tree is null)
+        {
+            session.PendingKeys.Add(key);
+            return;
         }
 
         if (session.FocusedInput is { } inputId)
@@ -251,7 +270,6 @@ public sealed class ScrollOSApp
             case MouseKind.Down when mouse.Button == MouseButton.Left:
                 break;
             default:
-                dirty = false; // hover and drags don't change anything yet
                 return;
         }
 
@@ -286,6 +304,9 @@ public sealed class ScrollOSApp
             case UiActionKind.Close:
                 Close(action.Entry);
                 break;
+            case UiActionKind.Suspend:
+                Suspend(action.Entry);
+                break;
             case UiActionKind.FocusApp:
                 Focus(action.Entry);
                 break;
@@ -316,7 +337,15 @@ public sealed class ScrollOSApp
         view.InvalidateAll();
     }
 
-    long? LiveSessionNearestBottom() => sessions.Count == 0 ? null : sessions.Keys.Max();
+    long? LiveSessionNearestBottom()
+    {
+        var live = sessions.Keys.Where(id => store.Get(id)?.Status == EntryStatus.Live).ToList();
+        return live.Count == 0 ? null : live.Max();
+    }
+
+    AppSession? SessionForHost(long hostId) => sessions.Values.FirstOrDefault(s => s.HostId == hostId);
+
+    int BackgroundCount => sessions.Keys.Count(id => store.Get(id)?.Status == EntryStatus.Suspended);
 
     // ---------------------------------------------------------------- commands and app lifecycle
 
@@ -373,20 +402,68 @@ public sealed class ScrollOSApp
             AppExited(entry.Id, null, "The PowerShell host isn't running.");
     }
 
+    /// <summary>
+    /// Brings an app back from history. A live app gets focus; a suspended one moves to the bottom of the
+    /// timeline; a closed artifact is relaunched from its saved state as a new entry.
+    /// </summary>
     void Resume(long id)
     {
         var entry = store.Get(id);
+
+        // A suspended-then-resumed app left a frozen snapshot behind; follow it to where the app continued.
+        for (int hops = 0; entry?.ContinuedIn is { } next && hops < 1000; hops++) entry = store.Get(next);
+
         if (entry is not { Kind: EntryKind.App, AppPath: not null })
         {
             Notify($"#{id} isn't an app artifact, so there's nothing to resume.", error: true);
             return;
         }
-        if (sessions.ContainsKey(id))
+        if (sessions.TryGetValue(entry.Id, out var session))
         {
-            Focus(id);
+            if (entry.Status == EntryStatus.Suspended) MoveToBottom(session, entry);
+            else Focus(entry.Id);
             return;
         }
-        StartApp(entry.App ?? entry.Title, entry.AppPath, id, store.ReadText(id, TimelineStore.StateFile));
+        StartApp(entry.App ?? entry.Title, entry.AppPath, entry.Id, store.ReadText(entry.Id, TimelineStore.StateFile));
+    }
+
+    /// <summary>Sends a live app to the background. It keeps running (timers, background work) but loses focus.</summary>
+    void Suspend(long id)
+    {
+        if (!sessions.TryGetValue(id, out var session) || session.Closing) return;
+        if (store.Get(id) is not { Status: EntryStatus.Live } entry) return;
+
+        entry.Status = EntryStatus.Suspended;
+        store.Update(entry);
+        if (focusedApp == id) Focus(null);
+        view.Invalidate(id);
+    }
+
+    /// <summary>
+    /// Resumes a suspended app at the bottom of the timeline. History stays append-only: the old entry is frozen
+    /// as a snapshot pointing to the new one, and the running session moves to the new entry.
+    /// </summary>
+    void MoveToBottom(AppSession session, TimelineEntry old)
+    {
+        var entry = store.Append(EntryKind.App, session.Name, e =>
+        {
+            e.Status = EntryStatus.Live;
+            e.App = session.Name;
+            e.AppPath = session.AppPath;
+            e.ResumedFrom = old.Id;
+        });
+
+        if (session.TreeJson is { } tree) store.WriteText(old.Id, TimelineStore.TreeFile, tree);
+        old.Status = EntryStatus.Closed;
+        old.ContinuedIn = entry.Id;
+        store.Update(old);
+
+        sessions.Remove(old.Id);
+        session.EntryId = entry.Id;
+        sessions[entry.Id] = session;
+        view.Invalidate(old.Id);
+        Focus(entry.Id);
+        scroll = 0;
     }
 
     void Close(long id)
@@ -394,7 +471,7 @@ public sealed class ScrollOSApp
         if (!sessions.TryGetValue(id, out var session) || session.Closing) return;
         session.Closing = true;
         view.Invalidate(id);
-        if (host is null || !host.Send(new Message { Type = MessageTypes.Close, Entry = id }))
+        if (host is null || !host.Send(new Message { Type = MessageTypes.Close, Entry = session.HostId }))
             AppExited(id, null, null);
     }
 
@@ -420,13 +497,17 @@ public sealed class ScrollOSApp
     void SendEvent(AppSession session, InputEvent input)
     {
         if (session.Closing) return;
-        host?.Send(new Message { Type = MessageTypes.Input, Entry = session.EntryId, Event = input });
+        host?.Send(new Message { Type = MessageTypes.Input, Entry = session.HostId, Event = input });
         view.Invalidate(session.EntryId);
     }
 
-    void Notify(string text, bool error = false)
+    void Notify(string text, bool error = false, long? source = null)
     {
-        store.Append(EntryKind.Notification, text, e => e.Error = error);
+        store.Append(EntryKind.Notification, text, e =>
+        {
+            e.Error = error;
+            e.Source = source;
+        });
         dirty = true;
     }
 
@@ -456,14 +537,20 @@ public sealed class ScrollOSApp
                 Finish(entry, m.Text, m.Error);
                 break;
 
-            case MessageTypes.Render when sessions.TryGetValue(m.Entry, out var session):
+            case MessageTypes.Render when SessionForHost(m.Entry) is { } session:
                 session.SetTree(m.Tree);
                 session.Error = m.Error;
-                view.Invalidate(m.Entry);
+                view.Invalidate(session.EntryId);
+                if (session.Tree is not null && session.PendingKeys.Count > 0)
+                {
+                    var pending = session.PendingKeys.ToList();
+                    session.PendingKeys.Clear();
+                    foreach (var key in pending) HandleAppKey(session, key);
+                }
                 break;
 
             case MessageTypes.Exited:
-                AppExited(m.Entry, m.State, m.Error);
+                AppExited(SessionForHost(m.Entry)?.EntryId ?? m.Entry, m.State, m.Error);
                 break;
 
             case MessageTypes.LaunchRequest when m.Text is not null && m.AppPath is not null:
@@ -479,7 +566,7 @@ public sealed class ScrollOSApp
                 break;
 
             case MessageTypes.Notify when m.Text is not null:
-                Notify(m.Text, m.Error is not null);
+                Notify(m.Text, m.Error is not null, SessionForHost(m.Entry)?.EntryId);
                 break;
         }
     }
@@ -541,6 +628,8 @@ public sealed class ScrollOSApp
         b.Fill(0, 0, b.Width, 1, ' ', bar);
         int x = b.Write(1, 0, "ScrollOS", bar with { Fg = Theme.Accent, Bold = true });
         x = b.Write(x, 0, "  history is the desktop", bar with { Fg = Theme.Muted });
+        if (BackgroundCount is var background and > 0)
+            x = b.Write(x, 0, $"  ◐ {background} in background", bar with { Fg = Theme.Accent });
         if (scroll > 0) b.Write(x, 0, $"  ↑ {scroll} lines back · PgDn to return", bar with { Fg = Theme.Accent });
 
         clock = DateTime.Now.ToString("HH:mm");
@@ -555,7 +644,7 @@ public sealed class ScrollOSApp
         bool active = focusedApp is null;
         hits.Add(new UiHit(new Rect(0, y, b.Width, 1), new UiAction(UiActionKind.FocusPrompt)));
 
-        string hint = !active ? "Tab: back to prompt · Esc: close app · Ctrl+Q: quit"
+        string hint = !active ? "Tab: prompt · Ctrl+Z: background · Esc: close · Ctrl+Q: quit"
             : !hostReady ? "starting PowerShell…"
             : "";
         if (hint.Length > 0) b.Write(b.Width - hint.Length - 1, y, hint, new Style(Fg: Theme.Muted));

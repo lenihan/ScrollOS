@@ -71,7 +71,7 @@ public sealed class TimelineStore
         File.AppendAllText(indexPath, JsonSerializer.Serialize(entry, TimelineJson.Default.TimelineEntry) + "\n");
 
     /// <summary>
-    /// After an unclean exit, nothing is still running: mark running commands done and live apps closed.
+    /// After an unclean exit, nothing is still running: mark running commands done and live or suspended apps closed.
     /// Returns how many entries were fixed up.
     /// </summary>
     public int RecoverInterrupted()
@@ -85,7 +85,7 @@ public sealed class TimelineStore
                 e.Error = true;
                 WriteText(e.Id, ErrorFile, "Interrupted: ScrollOS exited while this was running.");
             }
-            else if (e.Status == EntryStatus.Live)
+            else if (e.Status is EntryStatus.Live or EntryStatus.Suspended)
             {
                 e.Status = EntryStatus.Closed;
             }

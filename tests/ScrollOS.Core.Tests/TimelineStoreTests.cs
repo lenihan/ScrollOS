@@ -54,14 +54,16 @@ public sealed class TimelineStoreTests : IDisposable
         var store = new TimelineStore(home);
         store.Append(EntryKind.App, "Notes", e => e.Status = EntryStatus.Live);
         store.Append(EntryKind.Prompt, "Start-Sleep 100", e => e.Status = EntryStatus.Running);
+        store.Append(EntryKind.App, "Timer", e => e.Status = EntryStatus.Suspended);
 
         var reloaded = new TimelineStore(home);
-        Assert.Equal(2, reloaded.RecoverInterrupted());
+        Assert.Equal(3, reloaded.RecoverInterrupted());
 
         var after = new TimelineStore(home).Entries;
         Assert.Equal(EntryStatus.Closed, after[0].Status);
         Assert.Equal(EntryStatus.Done, after[1].Status);
         Assert.True(after[1].Error);
+        Assert.Equal(EntryStatus.Closed, after[2].Status);
     }
 
     [Fact]

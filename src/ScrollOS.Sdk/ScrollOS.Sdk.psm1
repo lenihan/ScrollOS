@@ -10,7 +10,10 @@
 #   Invoke-AppInput <event>        handle an event; output 'exit' to close (optional)
 #   Save-AppState                  return state to persist                 (optional)
 #
-# Events are hashtables: @{ type = 'click'|'select'|'submit'|'key'; target; index; value; key }
+# Events are hashtables: @{ type = 'click'|'select'|'submit'|'key'|'tick'; target; index; value; key }
+#
+# Background work: call Set-ScrollTimer to receive 'tick' events, which keep arriving while the app is
+# suspended (Ctrl+Z). Send-ScrollNotification adds an entry to the timeline; clicking it opens the app.
 
 function ConvertTo-WidgetList($Content) {
     if ($Content -is [scriptblock]) { return @(& $Content) }
@@ -87,7 +90,21 @@ function New-Divider {
 # ---------------------------------------------------------------------------- shell commands
 
 function Assert-ScrollShell {
-    if (-not $global:ScrollOS) { throw 'This command only works at the ScrollOS prompt.' }
+    if (-not $global:ScrollOS -or -not $global:ScrollOS.IsShell) { throw 'This command only works at the ScrollOS prompt.' }
+}
+
+function Send-ScrollNotification {
+    <# Adds a notification to the timeline. Sent from an app, clicking it opens that app. #>
+    param([Parameter(Mandatory, Position = 0)][string]$Text)
+    if (-not $global:ScrollOS) { throw 'Not running inside ScrollOS.' }
+    $global:ScrollOS.Notify($Text)
+}
+
+function Set-ScrollTimer {
+    <# Delivers a 'tick' event to Invoke-AppInput every N milliseconds, even in the background. 0 stops it. #>
+    param([Parameter(Mandatory, Position = 0)][int]$Milliseconds)
+    if (-not $global:ScrollOS -or $global:ScrollOS.IsShell) { throw 'Set-ScrollTimer only works inside an app.' }
+    $global:ScrollOS.SetTimer($Milliseconds)
 }
 
 function Get-ScrollApp {
@@ -150,4 +167,4 @@ function Register-ScrollApps {
 }
 
 Export-ModuleMember -Function New-Panel, New-Column, New-Row, New-Text, New-Button, New-List, New-Input, New-Divider,
-    Get-ScrollApp, Start-ScrollApp, Resume-App, Get-Timeline, Register-ScrollApps
+    Get-ScrollApp, Start-ScrollApp, Resume-App, Get-Timeline, Register-ScrollApps, Send-ScrollNotification, Set-ScrollTimer

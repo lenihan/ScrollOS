@@ -166,6 +166,14 @@ public sealed class AppSession(ScrollHost host, long entry) : Session(host)
         }
         """;
 
+    const string TickType = "tick";
+
+    Timer? timer;
+    int tickPending;
+    string? lastTree, lastError;
+
+    public long Entry => entry;
+
     protected override bool Handle(Message m)
     {
         switch (m.Type)
@@ -173,11 +181,10 @@ public sealed class AppSession(ScrollHost host, long entry) : Session(host)
             case MessageTypes.Launch:
                 return Launch(m);
             case MessageTypes.Input:
-                var (output, error) = Run(ps => ps.AddScript(InputScript).AddArgument(ToHashtable(m.Event)));
-                if (output.Any(o => o.BaseObject is string s && s.Equals("exit", StringComparison.OrdinalIgnoreCase)))
-                    return Exit(error);
-                Render(error);
-                return true;
+                return Dispatch(ToHashtable(m.Event));
+            case TickType:
+                Interlocked.Exchange(ref tickPending, 0);
+                return Dispatch(new Hashtable(StringComparer.OrdinalIgnoreCase) { ["type"] = TickType });
             case MessageTypes.Close:
                 return Exit(null);
             default:
@@ -185,11 +192,33 @@ public sealed class AppSession(ScrollHost host, long entry) : Session(host)
         }
     }
 
+    bool Dispatch(Hashtable inputEvent)
+    {
+        var (output, error) = Run(ps => ps.AddScript(InputScript).AddArgument(inputEvent));
+        if (output.Any(o => o.BaseObject is string s && s.Equals("exit", StringComparison.OrdinalIgnoreCase)))
+            return Exit(error);
+        Render(error);
+        return true;
+    }
+
+    /// <summary>
+    /// Delivers a 'tick' event every <paramref name="milliseconds"/> (0 stops). Ticks keep coming while the app
+    /// is suspended, which is how apps do background work. Ticks don't pile up behind a slow handler.
+    /// </summary>
+    public void SetTimer(int milliseconds)
+    {
+        timer?.Dispose();
+        timer = milliseconds <= 0 ? null : new Timer(_ =>
+        {
+            if (Interlocked.Exchange(ref tickPending, 1) == 0) Post(new Message { Type = TickType });
+        }, null, milliseconds, milliseconds);
+    }
+
     bool Launch(Message m)
     {
         try
         {
-            Runspace = CreateRunspace(null);
+            Runspace = CreateRunspace(new CoreBridge(Host, this));
         }
         catch (Exception ex)
         {
@@ -207,17 +236,19 @@ public sealed class AppSession(ScrollHost host, long entry) : Session(host)
     void Render(string? priorError)
     {
         var (output, error) = Run(ps => ps.AddScript(RenderScript));
-        Host.Send(new Message
-        {
-            Type = MessageTypes.Render,
-            Entry = entry,
-            Tree = output.LastOrDefault()?.BaseObject as string,
-            Error = priorError ?? error,
-        });
+        var tree = output.LastOrDefault()?.BaseObject as string;
+        error = priorError ?? error;
+
+        // Timer ticks often don't change anything; only send real updates.
+        if (tree == lastTree && error == lastError) return;
+        lastTree = tree;
+        lastError = error;
+        Host.Send(new Message { Type = MessageTypes.Render, Entry = entry, Tree = tree, Error = error });
     }
 
     bool Exit(string? error, bool save = true)
     {
+        SetTimer(0);
         string? state = null;
         if (save)
         {
@@ -240,9 +271,14 @@ public sealed class AppSession(ScrollHost host, long entry) : Session(host)
     };
 }
 
-/// <summary>Exposed to the shell runspace as <c>$ScrollOS</c> so SDK commands can ask the core to do things.</summary>
-public sealed class CoreBridge(ScrollHost host)
+/// <summary>
+/// Exposed to every runspace as <c>$ScrollOS</c> so SDK commands can ask the core to do things.
+/// <paramref name="app"/> is null in the shell runspace.
+/// </summary>
+public sealed class CoreBridge(ScrollHost host, AppSession? app = null)
 {
+    public bool IsShell => app is null;
+
     public void Launch(string name, string appPath) =>
         host.Send(new Message { Type = MessageTypes.LaunchRequest, Text = name, AppPath = appPath });
 
@@ -250,5 +286,13 @@ public sealed class CoreBridge(ScrollHost host)
 
     public void Quit() => host.Send(new Message { Type = MessageTypes.QuitRequest });
 
-    public void Notify(string text) => host.Send(new Message { Type = MessageTypes.Notify, Text = text });
+    /// <summary>Adds a notification to the timeline. From an app, clicking it opens that app.</summary>
+    public void Notify(string text) =>
+        host.Send(new Message { Type = MessageTypes.Notify, Text = text, Entry = app?.Entry ?? 0 });
+
+    public void SetTimer(int milliseconds)
+    {
+        if (app is null) throw new InvalidOperationException("Timers are only available to apps.");
+        app.SetTimer(milliseconds);
+    }
 }

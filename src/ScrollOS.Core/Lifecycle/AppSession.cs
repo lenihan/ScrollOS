@@ -2,10 +2,13 @@ using ScrollOS.Protocol;
 
 namespace ScrollOS.Core.Lifecycle;
 
-/// <summary>Core-side state of a live app: its latest UI tree and any text typed into its inputs.</summary>
+/// <summary>Core-side state of a running app: its latest UI tree and any text typed into its inputs.</summary>
 public sealed class AppSession(long entryId, string name, string appPath)
 {
-    public long EntryId { get; } = entryId;
+    /// <summary>The id the PowerShell host knows this session by: the entry it was launched in. Never changes.</summary>
+    public long HostId { get; } = entryId;
+    /// <summary>The timeline entry currently showing this app. Moves to a new entry when a suspended app is resumed.</summary>
+    public long EntryId { get; set; } = entryId;
     public string Name { get; } = name;
     public string AppPath { get; } = appPath;
 
@@ -17,6 +20,9 @@ public sealed class AppSession(long entryId, string name, string appPath)
 
     public Dictionary<string, string> Inputs { get; } = [];
     public string? FocusedInput { get; set; }
+
+    /// <summary>Keys typed before the app's first render; replayed once it knows which input has focus.</summary>
+    public List<Input.KeyEvent> PendingKeys { get; } = [];
 
     public void SetTree(string? json)
     {

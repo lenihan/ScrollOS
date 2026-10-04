@@ -31,6 +31,10 @@ Try the proof of concept:
 3. Quit with **Ctrl+Q** (or `exit`), start ScrollOS again, and the history is still there.
 4. Click **[ Resume ]** on the artifact (or double-click it, or run `Resume-App <id>`), and the notes come back.
 
+Background apps: type `timer`, enter `0.5 tea` to start a 30-second countdown, then press **Ctrl+Z**. The timer
+keeps running in the background (still visible, dimmed, in its timeline entry). When it ends, a notification
+appears in the timeline; click it to bring the timer back at the bottom.
+
 Other keys: **Tab** switches between the prompt and the live app, and **PgUp/PgDn** scroll.
 Useful commands: `Get-Timeline`, `Get-ScrollApp`, `Start-ScrollApp <name>`.
 Data lives in `%USERPROFILE%\.scrollos` (override with `--home <dir>`). The host log is in `logs\host.log`.
@@ -43,7 +47,7 @@ Data lives in `%USERPROFILE%\.scrollos` (override with `--home <dir>`). The host
 | `src/ScrollOS.Host` | `scrollos-host.exe`: hosts PowerShell; one runspace per app, plus the shell |
 | `src/ScrollOS.Protocol` | JSON-lines messages and the widget tree shared by both |
 | `src/ScrollOS.Sdk` | PowerShell module: widget builders (`New-Panel`, `New-List`, …) and shell commands |
-| `apps/` | Apps, one folder per app (`apps/NotesPS/NotesPS.psm1`) |
+| `apps/` | Apps, one folder per app (`apps/NotesPS/NotesPS.psm1`, `apps/TimerPS/TimerPS.psm1`) |
 | `tests/` | Unit tests, plus an end-to-end test that runs the full launch → close → resume flow |
 
 Writing an app: see the contract at the top of [ScrollOS.Sdk.psm1](src/ScrollOS.Sdk/ScrollOS.Sdk.psm1) and the
