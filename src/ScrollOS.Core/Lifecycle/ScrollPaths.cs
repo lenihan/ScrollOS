@@ -19,7 +19,7 @@ public sealed record ScrollPaths(string Home, string AppsDir, string SdkPath, st
 
         var baseDir = AppContext.BaseDirectory;
         var repo = FindRepoRoot(baseDir);
-        var hostExe = Path.Combine(baseDir, "host", "scrollos-host.exe");
+        var hostExe = Path.Combine(baseDir, "host", OperatingSystem.IsWindows() ? "scrollos-host.exe" : "scrollos-host");
 
         return repo is null
             ? new ScrollPaths(home, Path.Combine(baseDir, "apps"), Path.Combine(baseDir, "sdk", "ScrollOS.Sdk.psm1"), hostExe)

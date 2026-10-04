@@ -39,6 +39,52 @@ public sealed partial class WindowsAudio(string cacheDir) : IAudio
     private static partial bool PlaySoundW(string sound, nint module, uint flags);
 }
 
+/// <summary>
+/// Plays through an external player: paplay (PulseAudio, e.g. WSLg) or aplay (ALSA, e.g. Raspberry Pi OS Lite).
+/// Silent if neither is installed. One sound at a time, like <see cref="WindowsAudio"/>.
+/// </summary>
+[UnsupportedOSPlatform("windows")]
+public sealed class LinuxAudio(string cacheDir) : IAudio
+{
+    readonly string? player = FindPlayer();
+    System.Diagnostics.Process? current;
+
+    static string? FindPlayer()
+    {
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var name in new[] { "paplay", "aplay" })
+            foreach (var dir in path.Split(':', StringSplitOptions.RemoveEmptyEntries))
+                if (File.Exists(Path.Combine(dir, name))) return Path.Combine(dir, name);
+        return null;
+    }
+
+    public void Play(string sound)
+    {
+        if (player is null) return;
+        try
+        {
+            var path = ToneSynth.IsTone(sound) ? ToneSynth.CachedWav(sound, cacheDir) : sound;
+            if (path is null || !File.Exists(path)) return;
+
+            try { if (current is { HasExited: false }) current.Kill(); } catch (InvalidOperationException) { }
+            current?.Dispose();
+
+            // Redirect everything so the player never touches the terminal ScrollOS is drawing on.
+            var psi = new System.Diagnostics.ProcessStartInfo(player)
+            {
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            if (player.EndsWith("aplay", StringComparison.Ordinal)) psi.ArgumentList.Add("-q");
+            psi.ArgumentList.Add(path);
+            current = System.Diagnostics.Process.Start(psi);
+        }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or UnauthorizedAccessException) { }
+    }
+}
+
 /// <summary>Turns tone specs into 16-bit mono PCM WAV files.</summary>
 public static class ToneSynth
 {

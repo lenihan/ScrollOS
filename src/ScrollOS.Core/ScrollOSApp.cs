@@ -66,10 +66,14 @@ public sealed class ScrollOSApp
         view = new TimelineView(store, sessions);
     }
 
-    static IAudio DefaultAudio(ScrollPaths paths) =>
-        OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("SCROLLOS_MUTE") is not "1"
-            ? new WindowsAudio(Path.Combine(paths.Home, "cache", "sounds"))
-            : new NullAudio();
+    static IAudio DefaultAudio(ScrollPaths paths)
+    {
+        var cache = Path.Combine(paths.Home, "cache", "sounds");
+        if (Environment.GetEnvironmentVariable("SCROLLOS_MUTE") is "1") return new NullAudio();
+        if (OperatingSystem.IsWindows()) return new WindowsAudio(cache);
+        if (OperatingSystem.IsLinux()) return new LinuxAudio(cache);
+        return new NullAudio();
+    }
 
     public async Task<int> RunAsync()
     {

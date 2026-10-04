@@ -43,6 +43,24 @@ Other keys: **Tab** switches between the prompt and the live app, and **PgUp/PgD
 Useful commands: `Get-Timeline`, `Get-ScrollApp`, `Start-ScrollApp <name>`.
 Data lives in `%USERPROFILE%\.scrollos` (override with `--home <dir>`). The host log is in `logs\host.log`.
 
+## Running on Linux (WSL)
+
+Publish a self-contained build on Windows (the Linux side doesn't need .NET or PowerShell installed), then run it
+from WSL:
+
+```powershell
+./scripts/publish.ps1 -Runtime linux-arm64    # ARM PC; use linux-x64 on Intel/AMD
+wsl
+```
+
+```bash
+cd /mnt/c/<path-to-repo>/out/linux-arm64
+./scrollos
+```
+
+For sound in WSL, install a player: `sudo apt install pulseaudio-utils`. The same `linux-arm64` build is what a
+64-bit Raspberry Pi runs.
+
 ### Layout
 
 | Path | What it is |

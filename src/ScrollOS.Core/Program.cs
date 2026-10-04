@@ -14,13 +14,12 @@ for (int i = 0; i < args.Length; i++)
     }
 }
 
-if (!OperatingSystem.IsWindows())
-{
-    Console.Error.WriteLine("ScrollOS currently runs on Windows only.");
-    return 1;
-}
-
-var terminal = WindowsConsole.TryOpen(out var error);
+string? error = null;
+ITerminal? terminal =
+    OperatingSystem.IsWindows() ? WindowsConsole.TryOpen(out error)
+    : OperatingSystem.IsLinux() ? UnixTerminal.TryOpen(out error)
+    : null;
+error ??= terminal is null ? "ScrollOS runs on Windows and Linux." : null;
 if (terminal is null)
 {
     Console.Error.WriteLine(error);
